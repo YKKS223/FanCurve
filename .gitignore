@@ -1,0 +1,12 @@
+# Swift Package Manager build products (310 MB — never commit)
+.build/
+# Assembled app bundle and generated icon
+build/
+# macOS
+.DS_Store
+# Xcode
+*.xcodeproj
+*.xcworkspace
+.swiftpm/
+# Measurement output from the diagnostic commands
+*.tsv

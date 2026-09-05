@@ -151,7 +151,9 @@ struct ContentView: View {
                                 maxRPM: hw.maxRPM,
                                 liveTempC: store.status?.fans.first(where: { $0.index == selectedFan })?.sourceTempC,
                                 liveRPM: store.status?.fans.first(where: { $0.index == selectedFan })?.actualRPM,
-                                enabled: store.config.mode == .curve && binding.wrappedValue.enabled)
+                                enabled: store.config.mode == .curve && binding.wrappedValue.enabled,
+                                emergencyTempC: store.config.emergencyTempC,
+                                emergencyActive: store.status?.emergency ?? false)
 
                 if store.config.mode == .manual {
                     manualControls(binding: binding, hw: hw)

@@ -9,6 +9,10 @@ struct CurveEditorView: View {
     let liveTempC: Double?
     let liveRPM: Double?
     let enabled: Bool
+    /// Above this the curve and the ceiling are both ignored and every fan goes to maximum.
+    /// It was the single most dramatic thing the app does and the only one not drawn.
+    let emergencyTempC: Double
+    let emergencyActive: Bool
 
     @State private var dragIndex: Int?
     @State private var selection: Int?
@@ -25,6 +29,7 @@ struct CurveEditorView: View {
                 let plot = plotRect(in: geo.size)
                 Canvas { ctx, _ in
                     drawGrid(ctx, plot)
+                    drawEmergency(ctx, plot)
                     drawSafetyFloor(ctx, plot)
                     drawStockBaseline(ctx, plot)
                     drawCurve(ctx, plot)
@@ -182,6 +187,25 @@ struct CurveEditorView: View {
             ctx.draw(Text("上限 \(Int(cap)) rpm").font(.system(size: 9)).foregroundColor(.purple.opacity(0.9)),
                      at: CGPoint(x: r.maxX - 46, y: y(cap, r) - 8))
         }
+    }
+
+    /// The emergency threshold and the region beyond it, where nothing the user drew applies.
+    private func drawEmergency(_ ctx: GraphicsContext, _ r: CGRect) {
+        guard emergencyTempC > tempMin, emergencyTempC < tempMax else { return }
+        let px = x(emergencyTempC, r)
+        let zone = CGRect(x: px, y: r.minY, width: r.maxX - px, height: r.height)
+        ctx.fill(Path(zone), with: .color(.red.opacity(emergencyActive ? 0.20 : 0.07)))
+
+        var line = Path()
+        line.move(to: CGPoint(x: px, y: r.minY))
+        line.addLine(to: CGPoint(x: px, y: r.maxY))
+        ctx.stroke(line, with: .color(.red.opacity(0.8)),
+                   style: StrokeStyle(lineWidth: 1.5, dash: [7, 4]))
+
+        ctx.draw(Text("緊急冷却 \(Int(emergencyTempC)) °C 以上は最大回転")
+                    .font(.system(size: 9, weight: emergencyActive ? .bold : .regular))
+                    .foregroundColor(.red.opacity(0.95)),
+                 at: CGPoint(x: px + 96, y: r.minY + 26))
     }
 
     /// What the Mac would be doing on its own. Drawn so the point of the app — and the size of

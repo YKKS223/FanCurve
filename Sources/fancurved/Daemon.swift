@@ -31,8 +31,13 @@ final class Daemon {
     private var writeFailures = 0
     private var frozenTicks = 0
     private var healthyTicks = 0
-    private var emergencyTicks = 0
+    private var emergencyDetector = EmergencyDetector(thresholdC: 105)
+    private var smoothedSystemMax: Double?
     private var lastRawSystemMax: Double?
+    /// What the control loop actually acted on this cycle. `buildStatus` reports these rather
+    /// than taking its own reading: a separate read 0.4 s later showed 84 °C beside an
+    /// emergency flag raised at 111 °C, which read as a contradiction on screen.
+    private var lastReadings: [SensorReading] = []
     private var failsafeReason: String?
     /// Last time the GUI checked in. Distant past means "no app", which is the resting state.
     private var lastAppHeartbeat = Date.distantPast
@@ -46,9 +51,6 @@ final class Daemon {
     /// reading is stale, not that the machine is unusually steady.
     private static let frozenTickLimit = 120
     private static let recoveryTicks = 10
-    /// The emergency override needs corroboration so one glitched probe cannot pin the fans.
-    private static let emergencySensorQuorum = 2
-    private static let emergencyTickLimit = 2
 
     /// Read by the watchdog thread, which must never take `lock`.
     private let tickStampLock = NSLock()
@@ -180,6 +182,7 @@ final class Daemon {
             frozenTicks = 0
         }
         lastRawSystemMax = rawSystemMax
+        lastReadings = readings
 
         if let reason = failsafeTrigger() {
             engageFailsafe(reason)
@@ -197,22 +200,6 @@ final class Daemon {
 
         let sysMax = rawSystemMax ?? 0
 
-        // One probe reading hot is not enough to justify running every fan flat out.
-        let hotSensors = readings.filter {
-            $0.group != .battery && $0.group != .ambient && $0.value >= config.emergencyTempC
-        }.count
-        if hotSensors >= Self.emergencySensorQuorum {
-            emergencyTicks += 1
-        } else {
-            emergencyTicks = 0
-        }
-        let wasEmergency = emergency
-        emergency = emergencyTicks >= Self.emergencyTickLimit
-        if emergency != wasEmergency {
-            log(emergency ? "緊急冷却を開始します（\(hotSensors) 個のセンサーが \(Int(config.emergencyTempC)) °C 超）"
-                          : "緊急冷却を解除しました")
-        }
-
         // Issue permits for this cycle. Anything that cannot be positively justified simply
         // does not produce one, and a cycle with no permits is the instruction to let go.
         var permits: [BoostPermit] = []
@@ -222,8 +209,7 @@ final class Daemon {
         // unreachable and the fans held 2,500 rpm at 52 °C forever.
         var requestedByFan: [Int: Double] = [:]
 
-        // Preconditions for ordinary boost. Emergency ignores them: an override that stops
-        // working because the laptop was unplugged would not be an override.
+        // Preconditions for ordinary boost.
         let onAC = PowerSource.isOnACPower()
         let blocked = BoostPreconditions.blockReason(
             requiresCharging: config.boostRequiresCharging,
@@ -235,6 +221,35 @@ final class Daemon {
         if blocked != loggedBlockReason {
             loggedBlockReason = blocked
             log(blocked.map { "ブーストを見合わせます: \($0)" } ?? "ブーストの条件が揃いました")
+        }
+
+        // Emergency cooling only exists while this app is the one driving. In "システム標準"
+        // the user has said to leave the fans alone, and macOS handles heat perfectly well on
+        // its own — it runs this machine to 117 °C by design. Overriding that explicit choice
+        // was a bug: it made the app grab the fans in a mode where it should do nothing.
+        let controlling = config.mode != .system && blocked == nil
+
+        // Smoothed, because individual probes swing 15 °C in half a second (measured at idle).
+        // Judging an emergency on raw samples produced 35 activations in one session.
+        let emergencyAlpha = min(1.0, dt / 5.0)
+        smoothedSystemMax = smoothedSystemMax.map { $0 + (sysMax - $0) * emergencyAlpha } ?? sysMax
+        let hotSensors = readings.filter {
+            $0.group != .battery && $0.group != .ambient && $0.value >= config.emergencyTempC
+        }.count
+
+        emergencyDetector.thresholdC = config.emergencyTempC
+        let wasEmergency = emergency
+        if controlling {
+            emergency = emergencyDetector.update(smoothedMaxC: smoothedSystemMax ?? sysMax,
+                                                 sensorsAtOrAboveThreshold: hotSensors)
+        } else {
+            emergencyDetector.reset()
+            emergency = false
+        }
+        if emergency != wasEmergency {
+            log(emergency
+                ? "緊急冷却を開始します（平滑化 \(String(format: "%.1f", smoothedSystemMax ?? sysMax)) °C / \(hotSensors) 個のセンサーが \(Int(config.emergencyTempC)) °C 超）"
+                : "緊急冷却を解除しました")
         }
 
         for hw in fanController.fans {
@@ -254,17 +269,19 @@ final class Daemon {
             st.hysteresisTemp = effective
 
             var wanted: Double?
-            if emergency {
-                wanted = hw.maxRPM
-            } else if blocked != nil {
+            switch config.mode {
+            case .system:
+                // Hands off entirely, emergency included.
                 wanted = nil
-            } else if !curve.enabled {
-                wanted = nil
-            } else {
-                switch config.mode {
-                case .system: wanted = nil
-                case .manual: wanted = curve.manualRPM > 0 ? curve.manualRPM : nil
-                case .curve:  wanted = curve.rpm(at: effective)
+            case .manual, .curve:
+                if blocked != nil || !curve.enabled {
+                    wanted = nil
+                } else if emergency {
+                    wanted = hw.maxRPM
+                } else if config.mode == .manual {
+                    wanted = curve.manualRPM > 0 ? curve.manualRPM : nil
+                } else {
+                    wanted = curve.rpm(at: effective)
                 }
             }
 
@@ -448,7 +465,9 @@ final class Daemon {
     }
 
     private func buildStatus() -> SystemStatus {
-        let readings = catalog.readAll()
+        // Reuse the control loop's own readings so the numbers on screen and the decisions
+        // behind them come from the same instant.
+        let readings = lastReadings.isEmpty ? catalog.readAll() : lastReadings
         var groups: [String: Double] = [:]
         for g in SensorGroup.allCases {
             if let v = catalog.maxOf(group: g, in: readings) { groups[g.rawValue] = v }

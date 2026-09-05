@@ -5,6 +5,9 @@ Apple シリコン Mac 向けのカスタムファンカーブアプリ。macOS 
 
 検証環境: MacBook Pro (Mac15,10 / Apple M3 Max) / macOS 26.6.2 / Swift 6.3.3
 
+> 調査の過程でわかったこと（SMC の仕様、macOS の熱管理の仕組み、実測値、公開情報の誤り）は
+> **[FINDINGS.md](FINDINGS.md)** にまとめてあります。この README は使い方、FINDINGS は調査結果です。
+
 ---
 
 ## なぜ作るか — 実測した macOS 標準の挙動
@@ -295,6 +298,31 @@ fancurvectl watch 900 ~/Desktop/baseline.tsv     # 読み取りのみ・root 不
 `.gitignore` で `.build/`（310 MB）と `build/` を除外しています。
 ソース・スクリプト・テスト・この README だけをコミットしてください。
 `/Library/Application Support/FanCurve/config.json` は機体ごとの設定なので、リポジトリには含めません。
+
+---
+
+## macOS をアップデートしたら確認すること
+
+このアプリは**非公開の SMC 挙動と `thermalmonitord` の内部**に依存しています。OS 更新で
+前提が変わっても警告は出ないので、メジャーアップデート後は一度確認してください。
+所要 5 分、発熱なし。
+
+```bash
+# 1. 解除手順がまだ通るか（約40秒・アイドルのまま）
+sudo fancurvectl unlocktest
+
+# 2. 普段どおり使って、握れているか
+fancurvectl status        # 高温時に「🔒 このアプリが保持中」になるか
+```
+
+`unlocktest` が失敗する場合は `sudo fancurvectl diag` で SMC の生ステータスを見てください。
+挙動が変わっていた場合は、[FINDINGS.md](FINDINGS.md) の数値も取り直しが必要です。
+
+異常が出たらまずこれで元に戻せます:
+
+```bash
+sudo fancurvectl panic          # Ftst=0 を直接書いてシステム制御へ
+```
 
 ---
 

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.local.fancurved</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/libexec/fancurved</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ProcessType</key>
+    <string>Background</string>
+    <!-- launchd's default ThrottleInterval of 10 s left the diagnostic flag set for up to
+         11.1 s after a crash (measured). At 1 s the same measurement gives 0.12 s. -->
+    <key>ThrottleInterval</key>
+    <integer>1</integer>
+    <!-- Time to catch SIGTERM on reboot/shutdown/logout and clear Ftst before SIGKILL. -->
+    <key>ExitTimeOut</key>
+    <integer>20</integer>
+    <key>StandardOutPath</key>
+    <string>/var/log/fancurved.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/fancurved.log</string>
+</dict>
+</plist>

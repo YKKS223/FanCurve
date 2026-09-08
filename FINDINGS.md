@@ -171,7 +171,7 @@ LSControlLoop %d: tempMax %d, tempAverage %d, AFi %f, LS-ris %lld (up %lld, down
 
 macOS は:
 
-1. コア種別（P / E / GPU）ごとに、温度から**劣化加速係数（AF）**を算出
+1. コア種別（P / E / GPU）ごとに、温度から劣化加速係数（AF）を算出
 2. それを**積算**し、**NVRAM と NAND に永続化**（OS 再インストールでも消えない）
 3. 積算した消耗量に応じて**許容ダイ温度そのものを引き下げ**、`AppleCLPC` に送る
 

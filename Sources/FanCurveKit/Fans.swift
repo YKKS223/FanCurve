@@ -347,6 +347,7 @@ public final class FanController {
         }
         commandedTargets.removeAll()
         forced.removeAll()
+        unlockStage.removeAll()
     }
 
     /// Waits for the daemon to put the fan back into mode 3 after `restoreSystemControl`.
@@ -360,6 +361,93 @@ public final class FanController {
             Thread.sleep(forTimeInterval: 0.1)
         }
         return (false, Date().timeIntervalSince(start), SMC.shared.readUInt8(mdKey) ?? 0)
+    }
+
+    // MARK: - Non-blocking unlock
+
+    /// Where each fan is in the handover from macOS to manual control.
+    private enum UnlockStage {
+        case notStarted
+        case waitingForYield(since: Date)
+        case done
+    }
+    private var unlockStage: [Int: UnlockStage] = [:]
+    /// How long every fan may remain mid-handover before the whole attempt is abandoned.
+    public var handoverGraceSeconds: Double = 3
+
+    public enum UnlockProgress: Sendable {
+        case ready
+        case working
+        case failed(String)
+    }
+
+    /// Advances the handover by at most a couple of SMC operations and returns immediately.
+    ///
+    /// The blocking version polls for up to six seconds. That is fine for a diagnostic command
+    /// but not inside the control loop, which holds its lock across the call: a mode change sent
+    /// over the socket was measured taking 5.2 s because it queued behind exactly this wait.
+    /// Here the waiting is spread across ticks instead, so no single call blocks.
+    /// - Parameters:
+    ///   - timeout: how long the handover may stay incomplete across ticks before giving up.
+    ///     Kept short because between writing `Ftst` and the mode write landing, macOS cannot
+    ///     reclaim the fan and this app cannot drive it either — nobody is cooling. That window
+    ///     has to be measured in seconds, not tens of seconds.
+    ///   - slice: how long a single call may spend checking. A short bounded poll catches the
+    ///     usual sub-second handover on the first tick without holding the caller's lock for
+    ///     anything like the six seconds the blocking version could.
+    public func advanceUnlock(fanIndex i: Int,
+                              timeout: Double = 3,
+                              slice: Double = 0.2,
+                              now: Date = Date()) -> UnlockProgress {
+        let mdKey = modeKey(i)
+
+        if case .done = unlockStage[i] ?? .notStarted, forced.contains(i) { return .ready }
+        if SMC.shared.readUInt8(mdKey) == Self.modeManual {
+            unlockStage[i] = .done
+            forced.insert(i)
+            return .ready
+        }
+
+        switch unlockStage[i] ?? .notStarted {
+        case .notStarted, .done:
+            // M1-era machines accept the mode write outright; try that before engaging the
+            // diagnostic flag, so the window where macOS is locked out stays as short as possible.
+            if (try? SMC.shared.writeUInt8(mdKey, Self.modeManual)) != nil,
+               SMC.shared.readUInt8(mdKey) == Self.modeManual {
+                unlockStage[i] = .done
+                forced.insert(i)
+                return .ready
+            }
+            guard supportsForceTest else {
+                return .failed("\(mdKey) を書けず、\(Self.forceTestKey) もありません")
+            }
+            do { try SMC.shared.writeUInt8(Self.forceTestKey, 1) }
+            catch { return .failed("\(Self.forceTestKey)=1 を書けません: \(error)") }
+            forceTestEngaged = true
+            unlockStage[i] = .waitingForYield(since: now)
+            return .working
+
+        case .waitingForYield(let since):
+            // thermalmonitord usually lets go of mode 3 in well under a second. Poll briefly so
+            // the common case completes on this tick, then hand control back to the caller.
+            let sliceEnd = Date().addingTimeInterval(slice)
+            repeat {
+                if SMC.shared.readUInt8(mdKey) != Self.modeSystem,
+                   (try? SMC.shared.writeUInt8(mdKey, Self.modeManual)) != nil,
+                   SMC.shared.readUInt8(mdKey) == Self.modeManual {
+                    unlockStage[i] = .done
+                    forced.insert(i)
+                    return .ready
+                }
+                usleep(20_000)
+            } while Date() < sliceEnd
+
+            if now.timeIntervalSince(since) > timeout {
+                unlockStage[i] = .notStarted
+                return .failed("\(Int(timeout)) 秒待っても手動モードに移行できませんでした")
+            }
+            return .working
+        }
     }
 
     /// Applies one cycle's plan. `nil` means "hold nothing" and is the only path that needs no
@@ -392,11 +480,13 @@ public final class FanController {
         var problems: [String] = []
         for (index, rpm) in plan.sorted(by: { $0.key < $1.key }) {
             if !forced.contains(index) {
-                let report = unlockManualControl(fanIndex: index,
-                                                 timeout: unlockTimeout,
-                                                 writeRetryWindow: 3)
-                if !report.succeeded {
-                    problems.append("fan\(index): \(report.detail)")
+                switch advanceUnlock(fanIndex: index) {
+                case .ready:
+                    break
+                case .working:
+                    continue          // try again next tick; nothing blocks here
+                case .failed(let why):
+                    problems.append("fan\(index): \(why)")
                     continue
                 }
             }
@@ -405,8 +495,22 @@ public final class FanController {
             }
         }
 
-        // If nothing could be driven, do not sit on the flag with macOS locked out.
-        if problems.count == plan.count { restoreSystemControl() }
+        // All fans or none. Holding `Ftst` while any fan is still mid-handover means macOS
+        // cannot reclaim it and we cannot drive it — nobody is cooling that fan. Rather than
+        // sit in that state, hand everything back and try again from scratch next tick.
+        let undriven = plan.keys.filter { !forced.contains($0) }
+        if !undriven.isEmpty, forceTestEngaged {
+            let stuckTooLong = undriven.contains { index in
+                if case .waitingForYield(let since) = unlockStage[index] ?? .notStarted {
+                    return Date().timeIntervalSince(since) > handoverGraceSeconds
+                }
+                return false
+            }
+            if stuckTooLong || !problems.isEmpty {
+                problems.append("移行が完了しないため、いったん macOS に戻します")
+                restoreSystemControl()
+            }
+        }
         return problems
     }
 

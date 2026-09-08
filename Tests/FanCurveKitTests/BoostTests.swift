@@ -304,3 +304,25 @@ final class UncoveredFanTests: XCTestCase {
         XCTAssertEqual(plan?[1], 7450)
     }
 }
+
+final class HandoverWindowTests: XCTestCase {
+
+    /// Between writing `Ftst` and the mode write landing, macOS cannot reclaim the fan and this
+    /// app cannot drive it. That window has to stay short and bounded — these fix the numbers so
+    /// a future change cannot quietly widen it.
+    func testHandoverBoundsAreShort() {
+        let fc = FanController()
+        XCTAssertEqual(fc.handoverGraceSeconds, 3,
+                       "the window where nobody is cooling must stay in seconds")
+    }
+
+    func testAdvanceUnlockDefaultsAreBounded() {
+        // A single call must not block a caller holding a lock: the blocking version could sit
+        // for six seconds and was measured delaying a mode change by 5.2 s.
+        let fc = FanController()
+        let started = Date()
+        _ = fc.advanceUnlock(fanIndex: 99)      // no such fan; returns without waiting
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1.0,
+                          "advanceUnlock blocked far longer than its slice")
+    }
+}

@@ -23,6 +23,18 @@ final class DaemonStore: ObservableObject {
     @Published private(set) var history: [HistorySample] = []
     @Published private(set) var probeResult: FanController.ProbeResult?
     @Published private(set) var isProbing = false
+    /// What the user just picked, shown until the daemon confirms it.
+    ///
+    /// The picker reads the daemon's reported mode so the UI can never disagree with what is
+    /// actually controlling the fans. That is worth keeping — but on its own it means a click
+    /// does not move the control until the next poll, up to a second later, which reads as lag.
+    @Published private(set) var pendingMode: ControlMode?
+    /// When the pending choice was made, so it can never stick if confirmation never arrives.
+    private var pendingModeSince: Date?
+    private let pendingModeTimeout: Double = 3
+
+    /// The mode to show. The user's choice wins until the daemon has caught up with it.
+    var displayedMode: ControlMode { pendingMode ?? status?.mode ?? config.mode }
 
     /// The working copy the UI edits. Written back to the daemon on a debounce.
     @Published var config = AppConfig() {
@@ -97,6 +109,14 @@ final class DaemonStore: ObservableObject {
         if connectionError != nil { connectionError = nil }
         guard let s = r.status else { return }
         status = s
+        if let pending = pendingMode {
+            // Confirmed, or waited long enough that the daemon's own answer is the honest one.
+            let expired = pendingModeSince.map { Date().timeIntervalSince($0) > pendingModeTimeout } ?? true
+            if s.mode == pending || expired {
+                pendingMode = nil
+                pendingModeSince = nil
+            }
+        }
         if let hw = r.hardware, hw != hardware { hardware = hw }
 
         // Belt and braces: if the daemon knows about fans but our copy of the config does not,
@@ -118,12 +138,24 @@ final class DaemonStore: ObservableObject {
     }
 
     func setMode(_ mode: ControlMode) {
+        pendingMode = mode                  // reflect the click at once
+        pendingModeSince = Date()
         suppressPush = true
         config.mode = mode
         suppressPush = false
         Task {
-            _ = await request(DaemonRequest(cmd: .setMode, mode: mode))
+            let reply = await request(DaemonRequest(cmd: .setMode, mode: mode))
             await loadConfig()
+            // Refresh the status straight away instead of waiting for the next 1 Hz tick.
+            // `displayedMode` falls back to the daemon's reported mode once `pendingMode`
+            // clears, and clearing it against a one-second-old status made the control snap
+            // back to the previous selection and then forward again — the visible flicker.
+            await poll()
+            if reply?.ok != true {
+                // The daemon refused: showing what it actually reports beats showing the click.
+                pendingMode = nil
+                pendingModeSince = nil
+            }
         }
     }
 

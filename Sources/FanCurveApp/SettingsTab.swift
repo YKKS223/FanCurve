@@ -3,8 +3,8 @@ import FanCurveKit
 
 struct SettingsTab: View {
     @EnvironmentObject var store: DaemonStore
-    @State private var probeFan = 0
-    @State private var probeRPM = 3500.0
+    @Binding var probeFan: Int
+    @Binding var probeRPM: Double
 
     var body: some View {
         ScrollView {

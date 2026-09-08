@@ -5,8 +5,10 @@ import FanCurveKit
 struct SensorsView: View {
     @EnvironmentObject var store: DaemonStore
     @Binding var selectedFan: Int
-    @State private var filter = ""
-    @State private var group: SensorGroup? = nil
+    // Held by the parent: the tab content is switched rather than kept alive, so local state
+    // here would be thrown away every time the user looks at another tab.
+    @Binding var filter: String
+    @Binding var group: SensorGroup?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -48,7 +50,10 @@ struct SensorsView: View {
                         .font(.caption)
                 }
             }
-            .frame(minHeight: 320)
+            // A low floor, not a comfortable size: the table scrolls internally and expands
+            // to fill whatever the window gives it, so a large minimum only pushed the hint
+            // below it off the bottom of a short window.
+            .frame(minHeight: 160)
 
             Text("ヒント: 個別センサーは 1 コアだけを見るため揺れます。通常は「ファンカーブ」タブでグループ最高温度を使う方が安定します。")
                 .font(.caption).foregroundStyle(.secondary)

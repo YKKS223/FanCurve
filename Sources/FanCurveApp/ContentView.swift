@@ -3,25 +3,76 @@ import FanCurveKit
 
 struct ContentView: View {
     @EnvironmentObject var store: DaemonStore
-    @State private var selectedTab = 0
+    private enum Tab: CaseIterable, Hashable {
+        case curve, sensors, settings
+        var title: String {
+            switch self {
+            case .curve:    return "ファンカーブ"
+            case .sensors:  return "センサー"
+            case .settings: return "設定"
+            }
+        }
+        var icon: String {
+            switch self {
+            case .curve:    return "chart.xyaxis.line"
+            case .sensors:  return "thermometer.medium"
+            case .settings: return "gearshape"
+            }
+        }
+    }
+
+    @State private var selectedTab: Tab = .curve
     @State private var selectedFan = 0
+    // Owned here so switching tabs does not discard what the user typed or chose.
+    @State private var sensorFilter = ""
+    @State private var sensorGroup: SensorGroup? = nil
+    @State private var probeFan = 0
+    @State private var probeRPM = 3500.0
 
     var body: some View {
         VStack(spacing: 0) {
+            // The tab bar is the outermost navigation, so it sits above everything else.
+            // The header below it is a status bar rather than a section: which mode is
+            // active, and whether this app or macOS is holding the fans, has to stay on
+            // screen no matter which tab is open.
+            if store.isConnected {
+                HStack {
+                    Spacer()
+                    SegmentedSelector(items: Tab.allCases,
+                                      selection: selectedTab,
+                                      label: { $0.title },
+                                      systemImage: { $0.icon },
+                                      equalWidths: false) { selectedTab = $0 }
+                    Spacer()
+                }
+                .padding(.horizontal, 14)
+                .padding(.top, 10)
+                .padding(.bottom, 8)
+                Divider()
+            }
+
             header
             Divider()
             if store.isConnected {
-                TabView(selection: $selectedTab) {
-                    curveTab.tabItem { Label("ファンカーブ", systemImage: "chart.xyaxis.line") }.tag(0)
-                    SensorsView(selectedFan: $selectedFan).tabItem { Label("センサー", systemImage: "thermometer.medium") }.tag(1)
-                    SettingsTab().tabItem { Label("設定", systemImage: "gearshape") }.tag(2)
+                Group {
+                    switch selectedTab {
+                    case .curve:
+                        curveTab
+                    case .sensors:
+                        SensorsView(selectedFan: $selectedFan,
+                                    filter: $sensorFilter,
+                                    group: $sensorGroup)
+                    case .settings:
+                        SettingsTab(probeFan: $probeFan, probeRPM: $probeRPM)
+                    }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .padding(12)
             } else {
                 disconnected
             }
         }
-        .frame(minWidth: 760, minHeight: 620)
+        .frame(minWidth: 760, minHeight: 420)
         .onAppear { store.start() }
     }
 
@@ -79,18 +130,10 @@ struct ContentView: View {
                     .font(.caption).foregroundStyle(.orange).lineLimit(1)
             }
 
-            // Driven by the daemon's reported mode, never a local copy: during a CLI-driven
-            // test this picker showed "カーブ" while the daemon was actually in 手動.
-            Picker("", selection: Binding(
-                get: { store.status?.mode ?? store.config.mode },
-                set: { store.setMode($0) })) {
-                ForEach(ControlMode.allCases, id: \.self) { m in
-                    Text(m.displayName).tag(m)
-                }
-            }
-            .pickerStyle(.segmented)
-            .frame(width: 260)
-            .labelsHidden()
+            SegmentedSelector(items: ControlMode.allCases,
+                              selection: store.displayedMode,
+                              label: { $0.displayName }) { store.setMode($0) }
+                .frame(width: 280)
 
             Button {
                 store.resetToSystem()
@@ -128,14 +171,31 @@ struct ContentView: View {
 
     // MARK: - Curve tab
 
+    /// Fills the window when there is room and scrolls when there is not.
+    ///
+    /// The curve editor is a `GeometryReader`, so this stack always accepted whatever height
+    /// it was given: shorten the window and the graph shrank until the history chart at the
+    /// bottom was simply cut off, with no scrollbar and no way to reach it. Proposing at
+    /// least the viewport height keeps the graph growing with the window as before, while
+    /// anything past that becomes scrollable instead of invisible.
     private var curveTab: some View {
+        GeometryReader { geo in
+            ScrollView(.vertical) {
+                curveTabContent
+                    .frame(maxWidth: .infinity,
+                           minHeight: geo.size.height,
+                           alignment: .topLeading)
+            }
+        }
+    }
+
+    private var curveTabContent: some View {
         VStack(alignment: .leading, spacing: 12) {
             if let s = store.status, s.fans.count > 1 {
-                Picker("", selection: $selectedFan) {
-                    ForEach(s.fans) { f in Text(f.name).tag(f.index) }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
+                SegmentedSelector(items: s.fans.map(\.index),
+                                  selection: selectedFan,
+                                  label: { i in s.fans.first { $0.index == i }?.name ?? "ファン \(i)" },
+                                  equalWidths: false) { selectedFan = $0 }
             }
 
             if let fanStatus = store.status?.fans.first(where: { $0.index == selectedFan }) {
@@ -154,9 +214,12 @@ struct ContentView: View {
                                 emergencyTempC: store.config.emergencyTempC,
                                 emergencyActive: store.status?.emergency ?? false)
 
-                if store.config.mode == .manual {
-                    manualControls(binding: binding, hw: hw)
-                }
+                // Always laid out, never conditionally inserted. The curve editor above is a
+                // GeometryReader and therefore the flexible element in this stack, so a row
+                // appearing here was taken out of the graph's height — the graph shrank and
+                // everything below it crept upward the moment 手動 was selected.
+                manualControls(binding: binding, hw: hw,
+                               active: store.config.mode == .manual)
 
                 HistoryChartView(samples: store.history, fanIndex: selectedFan, maxRPM: hw.maxRPM)
             } else {
@@ -202,7 +265,7 @@ struct ContentView: View {
         }
     }
 
-    private func manualControls(binding: Binding<FanCurve>, hw: FanHardware) -> some View {
+    private func manualControls(binding: Binding<FanCurve>, hw: FanHardware, active: Bool) -> some View {
         HStack(spacing: 10) {
             Text("手動回転数").font(.callout)
             Slider(value: binding.manualRPM, in: 0...hw.maxRPM, step: 50)
@@ -212,6 +275,10 @@ struct ContentView: View {
                 .frame(width: 110, alignment: .trailing)
         }
         .padding(.vertical, 4)
+        .disabled(!active)
+        .opacity(active ? 1 : 0.4)
+        .help(active ? "このファンを指定した回転数で回します"
+                     : "手動モードのときだけ操作できます（値は保存されています）")
     }
 
     private func sourceTag(_ s: SensorSource) -> String {

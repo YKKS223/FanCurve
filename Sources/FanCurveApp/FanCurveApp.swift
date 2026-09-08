@@ -113,12 +113,9 @@ struct MenuBarPanel: View {
 
                 Divider()
 
-                Picker("", selection: Binding(
-                    get: { s.mode },
-                    set: { store.setMode($0) })) {
-                    ForEach(ControlMode.allCases, id: \.self) { Text($0.displayName).tag($0) }
-                }
-                .pickerStyle(.segmented).labelsHidden()
+                SegmentedSelector(items: ControlMode.allCases,
+                                  selection: store.displayedMode,
+                                  label: { $0.displayName }) { store.setMode($0) }
 
             } else {
                 Label("fancurved に接続できません", systemImage: "bolt.horizontal.circle")

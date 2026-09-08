@@ -29,11 +29,14 @@ struct ContentView: View {
 
     private var header: some View {
         HStack(spacing: 14) {
+            // No spinning animation here. A `repeatForever` animation never completes, so
+            // SwiftUI keeps re-laying out the whole view tree at display refresh rate — this
+            // one decorative icon held a core at 100 % and grew the process to 551 MB over
+            // three days. The gauge already shows the speed; the icon only needs to sit still.
             Image(systemName: "fanblades.fill")
                 .font(.title2)
-                .foregroundStyle(.tint)
-                .rotationEffect(.degrees(spin))
-                .animation(.linear(duration: 1).repeatForever(autoreverses: false), value: spin)
+                .foregroundStyle(store.status?.holdingControl == true ? AnyShapeStyle(.tint)
+                                                                     : AnyShapeStyle(.secondary))
 
             VStack(alignment: .leading, spacing: 1) {
                 Text("FanCurve").font(.headline)
@@ -98,10 +101,6 @@ struct ContentView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-    }
-
-    private var spin: Double {
-        (store.status?.fans.first?.actualRPM ?? 0) > 0 ? 360 : 0
     }
 
     private var disconnected: some View {

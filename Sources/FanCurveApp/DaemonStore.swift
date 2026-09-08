@@ -86,14 +86,15 @@ final class DaemonStore: ObservableObject {
         suppressPush = true
         config = cfg
         suppressPush = false
-        hardware = r.hardware ?? []
-        connectionError = nil
+        let hw = r.hardware ?? []
+        if hw != hardware { hardware = hw }
+        if connectionError != nil { connectionError = nil }
         return true
     }
 
     private func poll() async {
         guard let r = await request(DaemonRequest(cmd: .status)) else { return }
-        connectionError = nil
+        if connectionError != nil { connectionError = nil }
         guard let s = r.status else { return }
         status = s
         if let hw = r.hardware, hw != hardware { hardware = hw }
@@ -160,7 +161,9 @@ final class DaemonStore: ObservableObject {
         let snapshot = config
         guard let r = await request(DaemonRequest(cmd: .setConfig, config: snapshot)) else { return }
         if !r.ok { connectionError = r.error }
-        if let hw = r.hardware { hardware = hw }
+        // Only assign when it actually differs: writing an equal value to a @Published still
+        // fires objectWillChange, which re-lays out every view observing this store.
+        if let hw = r.hardware, hw != hardware { hardware = hw }
     }
 
     /// Force an immediate write, e.g. right before the window closes.

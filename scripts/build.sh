@@ -12,6 +12,11 @@ swift build -c release
 BIN="$ROOT/.build/release"
 APP="$ROOT/build/FanCurve.app"
 
+# Keep Spotlight out of the build output: otherwise every build shows up as another
+# "FanCurve" in Launchpad and search results, and an old one can be launched by mistake.
+mkdir -p "$ROOT/build"
+touch "$ROOT/build/.metadata_never_index"
+
 echo "==> アイコンを生成"
 mkdir -p "$ROOT/build"
 swift "$ROOT/scripts/makeicon.swift" "$ROOT" || echo "(アイコン生成をスキップ)"

@@ -129,6 +129,7 @@ public final class FanController {
         do {
             try SMC.shared.writeFloat("F\(i)Tg", Float(target))
             forced.insert(i)
+            commandedTargets[i] = target
             return .success(target)
         } catch let e as SMCError {
             return .failure(e)
@@ -139,6 +140,9 @@ public final class FanController {
 
     /// Fans whose `F%dMd` this process actually changed, and therefore owes a restore.
     private var wroteModeKey: Set<Int> = []
+    /// The last target this process wrote to each fan, so a release can tell its own leftover
+    /// value apart from one macOS has since set.
+    private var commandedTargets: [Int: Double] = [:]
     /// Fans whose `F%dMd` the firmware refused, so we only drive `F%dTg` for them.
     public private(set) var modeWriteRefused: Set<Int> = []
     /// The error text for the refusal, surfaced in the UI once we know the fallback worked.
@@ -174,6 +178,7 @@ public final class FanController {
         forced.removeAll()
         originalMode.removeAll()
         wroteModeKey.removeAll()
+        commandedTargets.removeAll()
     }
 
     /// Reads the current `F%dMd` of every fan. Only meaningful before anything is forced.
@@ -313,6 +318,7 @@ public final class FanController {
         do {
             try writeTolerantly("F\(i)Tg", float: Float(target))
             forced.insert(i)
+            commandedTargets[i] = target
             return .success(target)
         } catch let e as SMCError {
             return .failure(e)
@@ -328,6 +334,18 @@ public final class FanController {
             try? SMC.shared.writeUInt8(Self.forceTestKey, 0)
             forceTestEngaged = false
         }
+
+        // Clear our own leftover target as well. Dropping `Ftst` alone relies on macOS zeroing
+        // `F%dTg` when it reclaims, which it usually does — but a fan was seen still spinning
+        // at a manual speed after the mode had already returned to 3. Depending on the firmware
+        // to tidy up after us is not something to rely on.
+        //
+        // Only a value that is still the one we wrote is cleared, so a target macOS has set for
+        // itself in the meantime is never overwritten.
+        for (index, wrote) in commandedTargets where abs(targetRPM(index) - wrote) < 1 {
+            try? SMC.shared.writeFloat("F\(index)Tg", 0)
+        }
+        commandedTargets.removeAll()
         forced.removeAll()
     }
 

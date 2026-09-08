@@ -208,6 +208,8 @@ final class Daemon {
         // value made the ramp bottom out at the floor, so the "let go" threshold below it was
         // unreachable and the fans held 2,500 rpm at 52 °C forever.
         var requestedByFan: [Int: Double] = [:]
+        // Computed for every fan, permitted or not: holding Ftst locks macOS out of all of them.
+        var safetyFloorByFan: [Int: Double] = [:]
 
         // Preconditions for ordinary boost.
         let onAC = PowerSource.isOnACPower()
@@ -268,6 +270,8 @@ final class Daemon {
             else { effective = gate }
             st.hysteresisTemp = effective
 
+            safetyFloorByFan[hw.index] = SafetyFloor.minimumRPM(tempC: max(effective, sysMax),
+                                                                maxRPM: hw.maxRPM)
             var wanted: Double?
             switch config.mode {
             case .system:
@@ -279,7 +283,10 @@ final class Daemon {
                 } else if emergency {
                     wanted = hw.maxRPM
                 } else if config.mode == .manual {
-                    wanted = curve.manualRPM > 0 ? curve.manualRPM : nil
+                    // A fan with no manual value follows its own curve rather than being left
+                    // at the flat floor. Manual mode still takes both fans — Ftst is machine
+                    // wide — so the one you did not set needs a sensible target, not a fixed one.
+                    wanted = curve.manualRPM > 0 ? curve.manualRPM : curve.rpm(at: effective)
                 } else {
                     wanted = curve.rpm(at: effective)
                 }
@@ -299,7 +306,7 @@ final class Daemon {
                 //    than macOS would be — while we hold the flag, macOS cannot correct it.
                 //    It is applied after the ramp limiter, because safety must not be rate-limited.
                 //  * BoostPlan's flat floor is applied later and guards the stuck-flag case.
-                let safety = SafetyFloor.minimumRPM(tempC: max(effective, sysMax), maxRPM: hw.maxRPM)
+                let safety = safetyFloorByFan[hw.index] ?? 0
                 if stepped < safety, !loggedFloor.contains(hw.index) {
                     loggedFloor.insert(hw.index)
                     log("fan\(hw.index): \(Int(sysMax)) °C のため指示を安全下限 \(Int(safety)) rpm へ引き上げました")
@@ -332,7 +339,8 @@ final class Daemon {
 
         let plan = BoostPlan.make(permits: permits,
                                   hardware: fanController.fans,
-                                  floorRPM: BoostPlan.defaultFloorRPM)
+                                  floorRPM: BoostPlan.defaultFloorRPM,
+                                  safetyFloorRPM: safetyFloorByFan)
         let problems = fanController.applyBoost(plan)
 
         for hw in fanController.fans {

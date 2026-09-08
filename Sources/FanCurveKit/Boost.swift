@@ -30,17 +30,24 @@ public struct BoostPermit: Hashable, Sendable {
 public enum BoostPlan {
 
     /// Targets per fan index, or nil meaning "hold nothing, let macOS have the fans".
+    ///
+    /// - Parameter safetyFloorRPM: the temperature-driven minimum for each fan. Applied to
+    ///   **every** fan in the plan, not only the ones a permit named. While `Ftst` is held macOS
+    ///   cannot drive any fan, so a fan nobody asked for still has to be at least as fast as
+    ///   macOS would have run it. Without this, setting one fan by hand left the other pinned at
+    ///   2,502 rpm — 3,000 rpm short of stock at 117 °C.
     public static func make(permits: [BoostPermit],
                             hardware: [FanHardware],
-                            floorRPM: Double) -> [Int: Double]? {
+                            floorRPM: Double,
+                            safetyFloorRPM: [Int: Double] = [:]) -> [Int: Double]? {
         guard !permits.isEmpty, !hardware.isEmpty else { return nil }
 
         var plan: [Int: Double] = [:]
         for hw in hardware {
             let requested = permits.first { $0.fanIndex == hw.index }?.rpm ?? 0
             // The floor is raised to the fan's own minimum where the firmware asks for more,
-            // and everything is clamped to the fan's maximum.
-            let floor = max(floorRPM, hw.minRPM)
+            // and to whatever the temperature demands, then clamped to the fan's maximum.
+            let floor = max(max(floorRPM, hw.minRPM), safetyFloorRPM[hw.index] ?? 0)
             plan[hw.index] = min(hw.maxRPM, max(requested, floor))
         }
         return plan

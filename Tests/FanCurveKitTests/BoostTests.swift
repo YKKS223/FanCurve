@@ -245,3 +245,62 @@ final class PreconditionTests: XCTestCase {
         XCTAssertEqual(reason(onAC: false, since: 999), "バッテリー駆動中")
     }
 }
+
+final class UncoveredFanTests: XCTestCase {
+
+    private let hardware = [FanHardware(index: 0, minRPM: 2317, maxRPM: 6898),
+                            FanHardware(index: 1, minRPM: 2502, maxRPM: 7450)]
+
+    /// Regression: setting one fan by hand left the other at 2,502 rpm no matter how hot it got.
+    /// `Ftst` locks macOS out of both fans, so the one nobody asked for still has to keep up.
+    func testTheFanNobodyAskedForStillGetsTheTemperatureFloor() {
+        let floors = [0: SafetyFloor.minimumRPM(tempC: 117, maxRPM: 6898),
+                      1: SafetyFloor.minimumRPM(tempC: 117, maxRPM: 7450)]
+        let plan = BoostPlan.make(permits: [BoostPermit(fanIndex: 0, rpm: 4000)],
+                                  hardware: hardware,
+                                  floorRPM: BoostPlan.defaultFloorRPM,
+                                  safetyFloorRPM: floors)
+        XCTAssertEqual(plan?[1] ?? 0, 7450 * 0.75, accuracy: 1,
+                       "the uncovered fan was left at the flat floor while the die was at 117 °C")
+    }
+
+    func testNeverSlowerThanStockOnEitherFan() {
+        // Stock was measured ramping to about 4,000 rpm at 112 °C and 5,400 at 117 °C.
+        for (temp, stock) in [(112.0, 4000.0), (117.0, 5400.0)] {
+            let floors = Dictionary(uniqueKeysWithValues: hardware.map {
+                ($0.index, SafetyFloor.minimumRPM(tempC: temp, maxRPM: $0.maxRPM))
+            })
+            let plan = BoostPlan.make(permits: [BoostPermit(fanIndex: 0, rpm: 2600)],
+                                      hardware: hardware,
+                                      floorRPM: BoostPlan.defaultFloorRPM,
+                                      safetyFloorRPM: floors)
+            for hw in hardware {
+                XCTAssertGreaterThanOrEqual(plan?[hw.index] ?? 0, stock * 0.9,
+                                            "fan\(hw.index) at \(temp) °C is well under stock")
+            }
+        }
+    }
+
+    func testBelowTheRampNothingChanges() {
+        // Under 100 °C the temperature floor asks for nothing, so the flat floor still governs.
+        let floors = Dictionary(uniqueKeysWithValues: hardware.map {
+            ($0.index, SafetyFloor.minimumRPM(tempC: 90, maxRPM: $0.maxRPM))
+        })
+        let plan = BoostPlan.make(permits: [BoostPermit(fanIndex: 0, rpm: 4000)],
+                                  hardware: hardware,
+                                  floorRPM: BoostPlan.defaultFloorRPM,
+                                  safetyFloorRPM: floors)
+        XCTAssertEqual(plan?[0], 4000)
+        XCTAssertEqual(plan?[1], 2502)
+    }
+
+    func testTheTemperatureFloorNeverExceedsTheFanMaximum() {
+        let floors = [0: 99_000.0, 1: 99_000.0]
+        let plan = BoostPlan.make(permits: [BoostPermit(fanIndex: 0, rpm: 100)],
+                                  hardware: hardware,
+                                  floorRPM: BoostPlan.defaultFloorRPM,
+                                  safetyFloorRPM: floors)
+        XCTAssertEqual(plan?[0], 6898)
+        XCTAssertEqual(plan?[1], 7450)
+    }
+}

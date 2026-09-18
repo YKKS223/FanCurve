@@ -10,12 +10,12 @@ echo "==> Swift ビルド (release)"
 swift build -c release
 
 BIN="$ROOT/.build/release"
-APP="$ROOT/build/FanCurve.app"
-
-# Keep Spotlight out of the build output: otherwise every build shows up as another
-# "FanCurve" in Launchpad and search results, and an old one can be launched by mistake.
-mkdir -p "$ROOT/build"
-touch "$ROOT/build/.metadata_never_index"
+# Spotlight skips any folder whose name ends in ".noindex". Without it every build shows up as
+# another "FanCurve" in Launchpad and search results, and a stale copy gets launched by mistake.
+# (A `.metadata_never_index` file was tried first: it is only honoured at a volume root, and
+# the build copy kept appearing in search.)
+APP="$ROOT/build/app.noindex/FanCurve.app"
+mkdir -p "$ROOT/build/app.noindex"
 
 echo "==> アイコンを生成"
 mkdir -p "$ROOT/build"

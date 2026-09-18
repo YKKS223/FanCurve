@@ -37,7 +37,7 @@ echo "==> デーモンを起動"
 launchctl bootstrap system "$PLIST"
 sleep 2
 
-if [ -d "$ROOT/build/FanCurve.app" ]; then
+if [ -d "$ROOT/build/app.noindex/FanCurve.app" ]; then
     # The app stays resident in the menu bar after its window is closed, so reopening it just
     # re-shows the old process. Without this, a fresh bundle sits on disk unused.
     if pgrep -f 'FanCurve.app/Contents/MacOS/FanCurveApp' >/dev/null; then
@@ -47,7 +47,7 @@ if [ -d "$ROOT/build/FanCurve.app" ]; then
     fi
     echo "==> FanCurve.app を /Applications へ"
     rm -rf /Applications/FanCurve.app
-    cp -R "$ROOT/build/FanCurve.app" /Applications/FanCurve.app
+    cp -R "$ROOT/build/app.noindex/FanCurve.app" /Applications/FanCurve.app
     chown -R root:wheel /Applications/FanCurve.app
 fi
 

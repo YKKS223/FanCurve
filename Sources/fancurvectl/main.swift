@@ -45,6 +45,28 @@ func requireRoot() {
     }
 }
 
+/// Refuses to start a command that writes to the SMC while the daemon is running.
+///
+/// The daemon clears any `Ftst` it finds set — in every mode, every tick — so that a crashed
+/// tool cannot leave macOS locked out. That same safety net cuts the flag out from under a
+/// diagnostic that is still holding it. Measured on macOS 27: `unlocktest` with the daemon
+/// running left both fans in mode 1 at 0 rpm until the Mac slept; with the daemon stopped,
+/// the identical test handed back cleanly. Two writers cannot share the flag, so only one runs.
+func requireDaemonStopped() {
+    guard (try? DaemonClient().send(DaemonRequest(cmd: .ping)))?.ok == true else { return }
+    let plist = "/Library/LaunchDaemons/com.local.fancurved.plist"
+    FileHandle.standardError.write("""
+    fancurved が動作中のため実行できません。
+    デーモンは Ftst を検出すると 0 に戻すので、このコマンドと取り合いになり、
+    ファンが macOS に戻らない状態を作ります（macOS 27 で実測）。
+
+      停止:  sudo launchctl bootout system \(plist)
+      再開:  sudo launchctl bootstrap system \(plist)
+
+    """.data(using: .utf8)!)
+    exit(1)
+}
+
 func openSMC() {
     do { try SMC.shared.open() }
     catch { print("SMC を開けません: \(error)"); exit(1) }
@@ -82,6 +104,7 @@ case "keys":
 
 case "hang":
     requireRoot()
+    requireDaemonStopped()
     openSMC()
     let gfan = args.count > 1 ? Int(args[1]) : nil
     let grpm = args.count > 2 ? Double(args[2]) ?? 5000 : 5000
@@ -100,6 +123,7 @@ case "watch":
 
 case "diag":
     requireRoot()
+    requireDaemonStopped()
     openSMC()
 
     // The daemon would fight us for the fans, so park it in system mode — and put the user's
@@ -146,6 +170,7 @@ case "diag":
 
 case "unlocktest":
     requireRoot()
+    requireDaemonStopped()
     openSMC()
     let ufan = args.count > 1 ? Int(args[1]) : nil
     let urpm = args.count > 2 ? Double(args[2]) ?? 4000 : 4000
@@ -155,6 +180,7 @@ case "unlocktest":
 
 case "writetest":
     requireRoot()
+    requireDaemonStopped()
     openSMC()
     let wfan = args.count > 1 ? Int(args[1]) : nil
     let rcw = WriteTest.run(fanIndex: wfan)
@@ -163,6 +189,7 @@ case "writetest":
 
 case "hold":
     requireRoot()
+    requireDaemonStopped()
     openSMC()
     let hfan = args.count > 1 ? Int(args[1]) : nil
     let hrpm = args.count > 2 ? Double(args[2]) : nil
@@ -174,6 +201,7 @@ case "hold":
 
 case "contest":
     requireRoot()
+    requireDaemonStopped()
     openSMC()
     let cfan = args.count > 1 ? Int(args[1]) : nil
     let crpm = args.count > 2 ? Double(args[2]) : nil
@@ -183,6 +211,7 @@ case "contest":
 
 case "selftest":
     requireRoot()
+    requireDaemonStopped()
     openSMC()
     let fc = FanController()
     fc.enumerateFans()
@@ -290,6 +319,9 @@ case "status":
         print("待機   : \(b)（この間はファンを macOS が管理します）")
     }
     if let f = s.failsafeReason { print("⚠️ フェイルセーフ作動中: \(f)") }
+    if let st = s.strandedFans, !st.isEmpty {
+        print("⚠️ ファン \(st.map(String.init).joined(separator: ", ")) が macOS に戻っていません（冷却されていません）。スリープか再起動で戻ります")
+    }
     if let e = s.lastError { print("直近のエラー: \(e)") }
     print("")
     for g in SensorGroup.allCases {

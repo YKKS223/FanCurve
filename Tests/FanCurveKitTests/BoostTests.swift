@@ -204,15 +204,24 @@ final class PresetShapeTests: XCTestCase {
 
 final class PreconditionTests: XCTestCase {
 
-    private func reason(charging: Bool = true, onAC: Bool = true,
+    private func reason(os: Int = 26, charging: Bool = true, onAC: Bool = true,
                         app: Bool = true, since: Double = 0) -> String? {
-        BoostPreconditions.blockReason(requiresCharging: charging, onACPower: onAC,
+        BoostPreconditions.blockReason(osMajorVersion: os,
+                                       requiresCharging: charging, onACPower: onAC,
                                        requiresApp: app, secondsSinceAppHeartbeat: since,
                                        heartbeatTimeout: 5)
     }
 
     func testAllowedWhenPluggedInAndTheAppIsAlive() {
         XCTAssertNil(reason())
+    }
+
+    func testBlockedOnAnOSWhereReleaseIsUnverified() {
+        // macOS 27 left the fans in mode 1 at 0 rpm after Ftst was cleared. On a version
+        // where letting go is not known to work, nothing else can make taking control safe.
+        XCTAssertNotNil(reason(os: 27))
+        XCTAssertNotNil(reason(os: 25))
+        XCTAssertNotNil(reason(os: 27, charging: false, app: false))
     }
 
     func testBlockedOnBattery() {

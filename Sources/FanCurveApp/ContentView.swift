@@ -99,7 +99,17 @@ struct ContentView: View {
 
             Spacer()
 
-            if let s = store.status {
+            if let s = store.status, let stranded = s.strandedFans, !stranded.isEmpty {
+                // Takes the place of "macOS が制御中", which would be false here: the flag is
+                // clear, yet macOS has not taken these fans back and nothing is cooling them.
+                Label("ファンが macOS に戻っていません", systemImage: "exclamationmark.octagon.fill")
+                    .font(.caption.bold())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 8).padding(.vertical, 3)
+                    .background(Capsule().fill(Color.red))
+                    .help("ファン \(stranded.map(String.init).joined(separator: ", ")) が手動モードのまま残り、誰も冷却していません。"
+                          + "Mac をスリープさせて復帰するか、再起動すると macOS に戻ります。")
+            } else if let s = store.status {
                 // While the flag is held macOS cannot touch the fans. That must never be
                 // something the user has to infer from a fan gauge.
                 Label(s.holdingControl ? "このアプリが制御中" : "macOS が制御中",
@@ -115,7 +125,7 @@ struct ContentView: View {
             if let blocked = store.status?.boostBlockedReason, store.config.mode != .system {
                 Label(blocked, systemImage: store.status?.onACPower == false ? "battery.50" : "pause.circle")
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                    .help("この条件が満たされるまで、ファンは macOS が管理します。緊急冷却は条件に関係なく働きます。")
+                    .help("この条件が満たされるまで、ファンは macOS が管理します。緊急冷却もこの間は働きません。")
             }
             if let f = store.status?.failsafeReason {
                 Label(f, systemImage: "shield.lefthalf.filled")

@@ -37,9 +37,13 @@ FRAMELOG="$OUT/ab-$LABEL-frames.txt"
 PWRLOG="$OUT/ab-$LABEL-power.txt"
 
 cleanup() {
-    kill "${WATCH:-0}" "${PMSET:-0}" 2>/dev/null
-    "$CTL" manual 0 0 >/dev/null 2>&1
-    "$CTL" manual 1 0 >/dev/null 2>&1
+    kill "${WATCH:-0}" "${PMSET:-0}" "${GUARD:-0}" 2>/dev/null
+    # Only run B changes the manual speeds. Resetting them after run A wiped the user's own
+    # saved manual RPM for no reason.
+    if [ "$LABEL" = "B" ]; then
+        "$CTL" manual 0 0 >/dev/null 2>&1
+        "$CTL" manual 1 0 >/dev/null 2>&1
+    fi
     "$CTL" mode system >/dev/null 2>&1
 }
 trap cleanup EXIT INT TERM
@@ -101,6 +105,23 @@ WATCH=$!
 powermetrics --samplers cpu_power,thermal -i 2000 > "$PWRLOG" 2>/dev/null &
 PMSET=$!
 sleep 2
+
+# Stop the render if the machine goes past anything measured so far. The highest reading on
+# macOS 26 was 117.6 °C and SafetyFloor is defined up to 120 °C; a new OS that runs hotter
+# than that is itself the finding, and there is no need to keep heating past it to record it.
+ABORT_C=${ABORT_C:-120}
+(
+    over=0
+    while sleep 1; do
+        t=$(tail -1 "$TSV" 2>/dev/null | awk -F'\t' '{print int($8)}')
+        if [ "${t:-0}" -ge "$ABORT_C" ] 2>/dev/null; then over=$((over + 1)); else over=0; fi
+        if [ "$over" -ge 5 ]; then
+            echo; echo "    ⚠️ システム最高 ${t} °C が 5 秒続いたためレンダリングを中止します"
+            pkill -f 'Blender.app/Contents/MacOS/Blender -b' ; break
+        fi
+    done
+) &
+GUARD=$!
 
 echo "==> 3. レンダリング（${DEVICE} / ${WIDTH}px / ${FRAMES} フレーム × ${SAMPLES} samples）"
 echo "    最初にウォームアップを 1 フレーム流します（計測対象外）"

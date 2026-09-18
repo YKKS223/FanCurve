@@ -87,6 +87,12 @@ struct MenuBarPanel: View {
                     Label("緊急冷却中", systemImage: "exclamationmark.triangle.fill")
                         .font(.caption.bold()).foregroundStyle(.red)
                 }
+                if let stranded = s.strandedFans, !stranded.isEmpty {
+                    Label("ファンが macOS に戻っていません。スリープか再起動で戻ります",
+                          systemImage: "exclamationmark.octagon.fill")
+                        .font(.caption.bold()).foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
 
                 Divider()
 

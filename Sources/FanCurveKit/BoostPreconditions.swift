@@ -6,16 +6,35 @@ import IOKit.ps
 /// These are preconditions, not switches: failing one produces no permit, and no permit means
 /// the fans go back to macOS. Nothing here has a "turn it off again" branch that could be missed.
 ///
-/// Emergency cooling deliberately ignores all of them. A safety override that stops working
-/// because a laptop was unplugged, or because a window was closed, would not be a safety override.
+/// Emergency cooling is gated by them too: it only exists while this app is the one driving.
 public enum BoostPreconditions {
 
+    /// macOS major versions on which handing the fans back has been measured to work.
+    ///
+    /// Everything that makes letting go the safe default — `Ftst = 0` returns every fan to
+    /// mode 3 within about 3 s — was measured on macOS 26. On macOS 27.0 the same write left
+    /// both fans in mode 1 at 0 rpm for over five minutes, released at 91 °C, until the Mac
+    /// was put to sleep. On an OS where letting go is not known to hand control back, taking
+    /// control at all is unsafe, so an unlisted version never gets a permit. Add a version
+    /// here only after measuring the release on it.
+    public static let verifiedOSMajorVersions: Set<Int> = [26]
+
+    public static var currentOSMajorVersion: Int {
+        ProcessInfo.processInfo.operatingSystemVersion.majorVersion
+    }
+
     /// Human-readable reason ordinary boost is not allowed, or nil when it is.
-    public static func blockReason(requiresCharging: Bool,
+    public static func blockReason(osMajorVersion: Int = currentOSMajorVersion,
+                                   requiresCharging: Bool,
                                    onACPower: Bool,
                                    requiresApp: Bool,
                                    secondsSinceAppHeartbeat: Double,
                                    heartbeatTimeout: Double) -> String? {
+        // First, and not configurable: the other conditions decide whether boosting is
+        // wanted, this one whether it can be undone.
+        if !verifiedOSMajorVersions.contains(osMajorVersion) {
+            return "macOS \(osMajorVersion) ではファンの返却が未検証のため、制御しません"
+        }
         if requiresCharging, !onACPower {
             return "バッテリー駆動中"
         }

@@ -51,12 +51,17 @@ public struct SystemStatus: Codable, Sendable {
     /// left for the user to deduce from a stopped fan.
     public var boostBlockedReason: String?
     public var onACPower: Bool
+    /// Fans left in manual mode with nobody holding them: the flag is clear but macOS has not
+    /// taken them back, so nothing is cooling them. Measured on macOS 27 after a release. The
+    /// daemon cannot repair this itself — sleep or a restart does — so it is shown, loudly.
+    public var strandedFans: [Int]?
 
     public init(timestamp: Double, mode: ControlMode, fans: [FanStatus],
                 groupMax: [String: Double], systemMaxC: Double?, emergency: Bool,
                 isRoot: Bool, lastError: String?, failsafeReason: String? = nil,
                 holdingControl: Bool = false, boostFloorRPM: Double = 0,
-                boostBlockedReason: String? = nil, onACPower: Bool = true) {
+                boostBlockedReason: String? = nil, onACPower: Bool = true,
+                strandedFans: [Int]? = nil) {
         self.timestamp = timestamp; self.mode = mode; self.fans = fans
         self.groupMax = groupMax; self.systemMaxC = systemMaxC
         self.emergency = emergency; self.isRoot = isRoot; self.lastError = lastError
@@ -65,6 +70,7 @@ public struct SystemStatus: Codable, Sendable {
         self.boostFloorRPM = boostFloorRPM
         self.boostBlockedReason = boostBlockedReason
         self.onACPower = onACPower
+        self.strandedFans = strandedFans
     }
 }
 

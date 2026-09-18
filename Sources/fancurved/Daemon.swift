@@ -43,6 +43,11 @@ final class Daemon {
     private var lastAppHeartbeat = Date.distantPast
     private var boostBlockedReason: String?
     private var loggedBlockReason: String?
+    /// When each fan was first seen in manual mode with nobody holding the flag.
+    private var strandedSince: [Int: Date] = [:]
+    private var strandedFans: [Int] = []
+    /// macOS 26 takes a fan back ~3 s after the flag clears; well past that means it will not.
+    private static let strandedAfterSeconds: Double = 15
 
     /// Consecutive bad ticks before the corresponding failsafe engages.
     private static let readFailureLimit = 3
@@ -84,6 +89,10 @@ final class Daemon {
         catalog.discover()
 
         log("ファン \(fanController.fans.count) 基、温度センサー \(catalog.sensors.count) 個を検出")
+        let os = ProcessInfo.processInfo.operatingSystemVersionString
+        log(BoostPreconditions.verifiedOSMajorVersions.contains(BoostPreconditions.currentOSMajorVersion)
+            ? "macOS \(os): 返却を検証済みのバージョンです"
+            : "macOS \(os): 返却が未検証のため、このバージョンではファンを制御しません")
         for f in fanController.fans {
             log("  fan\(f.index): \(Int(f.minRPM))–\(Int(f.maxRPM)) rpm")
         }
@@ -183,6 +192,8 @@ final class Daemon {
         }
         lastRawSystemMax = rawSystemMax
         lastReadings = readings
+
+        checkForStrandedFans(now: now)
 
         if let reason = failsafeTrigger() {
             engageFailsafe(reason)
@@ -363,6 +374,34 @@ final class Daemon {
         writeFailures = problems.isEmpty ? 0 : writeFailures + 1
     }
 
+    // MARK: - Stranded fans
+
+    /// Watches for fans left in manual mode after the flag was cleared.
+    ///
+    /// Checked in every mode, システム標準 included, because that is exactly where it bites:
+    /// the app believes macOS has the fans and macOS has not taken them. Only reads are done
+    /// here. Nothing this daemon can write is known to return such a fan — clearing the flag
+    /// again is what produced the state — so the job is to make it impossible to miss.
+    private func checkForStrandedFans(now: Date) {
+        let flagClear = !fanController.forceTestEngaged && (fanController.forceTestValue() ?? 0) == 0
+        var stranded: [Int] = []
+        for hw in fanController.fans {
+            if flagClear, fanController.modeByte(hw.index) == 1 {
+                let since = strandedSince[hw.index] ?? now
+                strandedSince[hw.index] = since
+                if now.timeIntervalSince(since) >= Self.strandedAfterSeconds { stranded.append(hw.index) }
+            } else {
+                strandedSince[hw.index] = nil
+            }
+        }
+        if stranded != strandedFans {
+            log(stranded.isEmpty
+                ? "取り残されていたファンが macOS に戻りました"
+                : "⚠️ ファン \(stranded.map(String.init).joined(separator: ", ")) が手動モードのまま macOS に戻っていません（スリープか再起動で戻ります）")
+            strandedFans = stranded
+        }
+    }
+
     // MARK: - Failsafe
 
     /// Why the daemon must stop driving the fans, or nil while everything is trustworthy.
@@ -508,7 +547,8 @@ final class Daemon {
                             holdingControl: fanController.forceTestEngaged,
                             boostFloorRPM: BoostPlan.defaultFloorRPM,
                             boostBlockedReason: boostBlockedReason,
-                            onACPower: PowerSource.isOnACPower())
+                            onACPower: PowerSource.isOnACPower(),
+                            strandedFans: strandedFans.isEmpty ? nil : strandedFans)
     }
 
     func log(_ message: String) {
